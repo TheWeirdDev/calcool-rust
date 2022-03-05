@@ -25,32 +25,35 @@ impl Parser {
         }
     }
 
-    fn consume(&self, kind: TokenKind, pos: &mut usize) -> Result<&Token> {
-        if let Some(token) = self.tokens.get(*pos) {
-            if token.kind == kind {
-                *pos += 1;
-                Ok(token)
-            } else {
-                Err((
-                    format!("Expected {:?}, found {:?}", kind, token.kind),
-                    ErrorType::Static(token.clone()),
-                ))
-            }
+    fn consume(&self, kind: TokenKind, pos: &mut usize) -> Result<Token> {
+        let token = self.get_current_token(pos)?;
+        if token.kind == kind {
+            *pos += 1;
+            Ok(token)
         } else {
-            Err(("Unexpected end of input".to_string(), ErrorType::Simple))
+            Err((
+                format!("Expected {:?}, found {:?}", kind, token.kind),
+                ErrorType::Static(token.clone()),
+            ))
         }
     }
+
     fn expect(&self, kind: TokenKind, pos: &mut usize) -> Result<()> {
+        let token = self.get_current_token(pos)?;
+        if token.kind != kind {
+            return Err((
+                format!("Expected {:?}, found {:?}", kind, token.kind),
+                ErrorType::Static(token.clone()),
+            ));
+        }
+        Ok(())
+    }
+
+    fn get_current_token(&self, pos: &mut usize) -> Result<Token> {
         if let Some(token) = self.tokens.get(*pos) {
-            if token.kind != kind {
-                return Err((
-                    format!("Expected {:?}, found {:?}", kind, token.kind),
-                    ErrorType::Static(token.clone()),
-                ));
-            }
-            Ok(())
+            Ok(token.clone())
         } else {
-            Err(("Unexpected end of input".to_string(), ErrorType::Simple))
+            Err((format!("Unexpected end of input"), ErrorType::Simple))
         }
     }
 
@@ -80,9 +83,10 @@ impl Parser {
                         TokenKind::Open => {
                             self.consume(TokenKind::Open, pos)?;
                             let mut args = Vec::new();
-                            while self.tokens[*pos].kind != TokenKind::Close {
+                            while self.get_current_token(pos)?.kind != TokenKind::Close {
                                 args.push(Box::new(self.parse_impl(pos, TokenPrecedance::None)?));
-                                if self.tokens[*pos].kind == TokenKind::Comma {
+                                let token = self.get_current_token(pos)?;
+                                if token.kind == TokenKind::Comma {
                                     self.consume(TokenKind::Comma, pos)?;
                                 } else {
                                     self.expect(TokenKind::Close, pos)?;
