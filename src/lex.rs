@@ -1,4 +1,4 @@
-use crate::expr::{Result, Unit};
+use crate::expr::{ErrorType, Result, Unit};
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub struct Location {
@@ -9,6 +9,11 @@ pub struct Location {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum TokenKind {
     Num(Unit),
+    Nil,
+    True,
+    False,
+    Inf,
+    NaN,
     Op,
     Open,
     Close,
@@ -28,6 +33,7 @@ pub struct Token {
 #[derive(Debug, PartialEq, Eq, Clone, PartialOrd, Ord)]
 pub enum TokenPrecedance {
     None = 0,
+    Bool,
     AddSub,
     MulDiv,
     Pow,
@@ -39,6 +45,7 @@ pub fn get_token_precedence(token: &Token) -> TokenPrecedance {
     match token.kind {
         TokenKind::Num(_) => TokenPrecedance::None,
         TokenKind::Op => match token.value.as_str() {
+            "<" | ">" | "<=" | ">=" | "==" | "!=" => TokenPrecedance::Bool,
             "+" | "-" => TokenPrecedance::AddSub,
             "*" | "/" => TokenPrecedance::MulDiv,
             "^" => TokenPrecedance::Pow,
@@ -95,12 +102,59 @@ impl Lexer {
                         tokens.push(self.read_number()?);
                     }
                     '+' | '-' | '*' | '/' | '^' => {
-                        tokens.push(Token {
-                            kind: TokenKind::Op,
-                            value: c.to_string(),
-                            loc: self.current_loc.clone(),
-                        });
+                        let loc = self.current_loc.clone();
                         self.next();
+                        if self.peek() == Some('=') {
+                            self.next();
+                            tokens.push(Token {
+                                kind: TokenKind::Assign,
+                                value: format!("{}=", c),
+                                loc,
+                            });
+                        } else {
+                            tokens.push(Token {
+                                kind: TokenKind::Op,
+                                value: c.to_string(),
+                                loc,
+                            });
+                        }
+                    }
+                    '<' | '>' | '=' => {
+                        self.next();
+                        if let Some(c2) = self.peek() {
+                            let mut kind = TokenKind::Op;
+                            let loc = self.current_loc.clone();
+                            let mut value = String::from(c);
+                            if c2 == '=' {
+                                self.next();
+                                value.push(c2);
+                            } else if c == '=' {
+                                kind = TokenKind::Assign;
+                            }
+                            tokens.push(Token { kind, value, loc });
+                        }
+                    }
+                    '!' => {
+                        self.next();
+                        if let Some(c2) = self.peek() {
+                            if c2 == '=' {
+                                self.next();
+                                tokens.push(Token {
+                                    kind: TokenKind::Op,
+                                    value: String::from("!="),
+                                    loc: self.current_loc.clone(),
+                                });
+                            } else {
+                                return Err((
+                                    "Unexpected character: !".to_string(),
+                                    ErrorType::Static(Token {
+                                        kind: TokenKind::Nil,
+                                        value: String::from(c),
+                                        loc: self.current_loc.clone(),
+                                    }),
+                                ));
+                            }
+                        }
                     }
                     ',' => {
                         tokens.push(Token {
@@ -132,19 +186,35 @@ impl Lexer {
                             "def" => {
                                 id.kind = TokenKind::Define;
                             }
+                            "nil" => {
+                                id.kind = TokenKind::Nil;
+                            }
+                            "inf" => {
+                                id.kind = TokenKind::Inf;
+                            }
+                            "nan" => {
+                                id.kind = TokenKind::NaN;
+                            }
+                            "true" => {
+                                id.kind = TokenKind::True;
+                            }
+                            "false" => {
+                                id.kind = TokenKind::False;
+                            }
                             _ => {}
                         }
                         tokens.push(id);
                     }
-                    '=' => {
-                        tokens.push(Token {
-                            kind: TokenKind::Assign,
-                            value: c.to_string(),
-                            loc: self.current_loc.clone(),
-                        });
-                        self.next();
+                    _ => {
+                        return Err((
+                            format!("Unexpected character: {}", c),
+                            ErrorType::Static(Token {
+                                kind: TokenKind::Nil,
+                                value: String::from(c),
+                                loc: self.current_loc.clone(),
+                            }),
+                        ));
                     }
-                    _ => {}
                 }
             }
         }
@@ -161,14 +231,28 @@ impl Lexer {
                 num.push(self.next().unwrap());
             } else if c == '.' {
                 if seen_dot {
-                    return Err(format!("Unexpected dot at: {}", self.current_loc.column));
+                    return Err((
+                        format!("Unexpected dot at: {}", self.current_loc.column),
+                        ErrorType::Static(Token {
+                            kind: TokenKind::Nil,
+                            value: String::from(c),
+                            loc: self.current_loc.clone(),
+                        }),
+                    ));
                 }
                 seen_dot = true;
                 num.push(self.next().unwrap());
             } else if c == 'e' {
                 let loc = self.current_loc.column;
                 if seen_e {
-                    return Err(format!("Unexpected e at: {}", loc));
+                    return Err((
+                        format!("Unexpected e at: {}", loc),
+                        ErrorType::Static(Token {
+                            kind: TokenKind::Nil,
+                            value: String::from(c),
+                            loc: self.current_loc.clone(),
+                        }),
+                    ));
                 }
                 seen_e = true;
                 num.push(self.next().unwrap());
@@ -177,7 +261,14 @@ impl Lexer {
                         num.push(self.next().unwrap());
                     }
                 } else {
-                    return Err(format!("Unexpected e at: {}", loc));
+                    return Err((
+                        format!("Unexpected e at: {}", loc),
+                        ErrorType::Static(Token {
+                            kind: TokenKind::Nil,
+                            value: String::from(c),
+                            loc: self.current_loc.clone(),
+                        }),
+                    ));
                 }
             } else {
                 if self.pos + 3 <= self.input.len() {
@@ -204,7 +295,14 @@ impl Lexer {
                     }
                 } else {
                     if c.is_ascii_alphabetic() {
-                        return Err(format!("Unexpected character: {}", c));
+                        return Err((
+                            format!("Unexpected character: {}", c),
+                            ErrorType::Static(Token {
+                                kind: TokenKind::Nil,
+                                value: String::from(c),
+                                loc: self.current_loc.clone(),
+                            }),
+                        ));
                     }
                     break;
                 }

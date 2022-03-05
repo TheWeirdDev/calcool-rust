@@ -1,5 +1,5 @@
 use crate::{
-    expr::{Expr, Result},
+    expr::{ErrorType, Expr, Result},
     lex::{get_token_precedence, Token, TokenKind, TokenPrecedance},
 };
 
@@ -16,7 +16,10 @@ impl Parser {
         let mut pos = 0;
         let res = self.parse_impl(&mut pos, TokenPrecedance::None)?;
         if pos < self.tokens.len() {
-            Err(format!("Unexpected token: {}", self.tokens[pos].value))
+            Err((
+                format!("Unexpected token: {}", self.tokens[pos].value),
+                ErrorType::Static(self.tokens[pos].clone()),
+            ))
         } else {
             Ok(res)
         }
@@ -28,33 +31,42 @@ impl Parser {
                 *pos += 1;
                 Ok(token)
             } else {
-                Err(format!("Expected {:?}, found {:?}", kind, token.kind))
+                Err((
+                    format!("Expected {:?}, found {:?}", kind, token.kind),
+                    ErrorType::Static(token.clone()),
+                ))
             }
         } else {
-            Err("Unexpected end of input".to_string())
+            Err(("Unexpected end of input".to_string(), ErrorType::Simple))
         }
     }
     fn expect(&self, kind: TokenKind, pos: &mut usize) -> Result<()> {
         if let Some(token) = self.tokens.get(*pos) {
             if token.kind != kind {
-                return Err(format!("Expected {:?}, found {:?}", kind, token.kind));
+                return Err((
+                    format!("Expected {:?}, found {:?}", kind, token.kind),
+                    ErrorType::Static(token.clone()),
+                ));
             }
             Ok(())
         } else {
-            Err("Unexpected end of input".to_string())
+            Err(("Unexpected end of input".to_string(), ErrorType::Simple))
         }
     }
 
     fn parse_impl(&self, pos: &mut usize, prec: TokenPrecedance) -> Result<Expr> {
         if *pos >= self.tokens.len() {
-            return Err("Unexpected end of input".to_string());
+            return Err(("Unexpected end of input".to_string(), ErrorType::Simple));
         }
         let token = &self.tokens[*pos];
         *pos += 1;
         let mut left = match token.kind {
-            TokenKind::Num(_) => Expr::Num(token.clone()),
+            TokenKind::Num(_) | TokenKind::Inf | TokenKind::NaN => Expr::Num(token.clone()),
+            TokenKind::Nil => Expr::Nil(token.clone()),
+            TokenKind::False => Expr::Bool(token.clone(), false),
+            TokenKind::True => Expr::Bool(token.clone(), true),
             TokenKind::Op => Expr::Unary(
-                token.value.clone(),
+                token.clone(),
                 Box::new(self.parse_impl(pos, TokenPrecedance::Unary)?),
             ),
             TokenKind::Open => {
@@ -76,21 +88,21 @@ impl Parser {
                                     self.expect(TokenKind::Close, pos)?;
                                 }
                             }
-                            let res = Expr::Call(token.value.clone(), args);
+                            let res = Expr::Call(token.clone(), args);
                             self.consume(TokenKind::Close, pos)?;
                             res
                         }
                         TokenKind::Assign => {
                             self.consume(TokenKind::Assign, pos)?;
                             Expr::Assign(
-                                token.value.clone(),
+                                token.clone(),
                                 Box::new(self.parse_impl(pos, TokenPrecedance::None)?),
                             )
                         }
-                        _ => Expr::Var(token.value.clone()),
+                        _ => Expr::Var(token.clone()),
                     }
                 } else {
-                    Expr::Var(token.value.clone())
+                    Expr::Var(token.clone())
                 }
             }
             TokenKind::Define => {
@@ -106,16 +118,21 @@ impl Parser {
                 self.consume(TokenKind::Close, pos)?;
                 self.consume(TokenKind::Assign, pos)?;
                 let res = self.parse_impl(pos, TokenPrecedance::None)?;
-                Expr::Define(name.value.clone(), args, Box::new(res))
+                Expr::Define(name.clone(), args, Box::new(res))
             }
-            _ => return Err(format!("Unexpected token {:?}", token.kind)),
+            _ => {
+                return Err((
+                    format!("Unexpected token {:?}", token.kind),
+                    ErrorType::Static(token.clone()),
+                ))
+            }
         };
         while *pos < self.tokens.len() {
             if let Some(next) = self.tokens.get(*pos) {
                 if next.kind == TokenKind::Op && prec < get_token_precedence(next) {
                     *pos += 1;
                     left = Expr::Binary(
-                        next.value.clone(),
+                        next.clone(),
                         Box::new(left),
                         Box::new(self.parse_impl(pos, get_token_precedence(next))?),
                     );
